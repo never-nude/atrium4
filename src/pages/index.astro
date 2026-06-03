@@ -59,9 +59,10 @@ const description = 'A digital museum of sculpture — explore 174 works in 3D, 
         hud={false}
         tag={featured.hasPreview ? '3D MODEL' : 'PHOTOGRAPH'}
         upAxis={featured.modelUpAxis}
+        materialAppearance={featured.materialAppearance}
       />
       <div>
-        <p class="eyebrow">Featured piece</p>
+        <p class="eyebrow">Featured this week</p>
         <h2 id="featured-title">{featured.title}</h2>
         {featured.description && <p class="lede">{featured.description}</p>}
         <ul class="meta-line" aria-label="Details">

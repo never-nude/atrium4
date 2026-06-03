@@ -2,6 +2,7 @@ import rawCatalog from '../data/catalog.json';
 import rawPreviews from '../data/previews.json';
 import rawRenders from '../data/renders.json';
 import rawOrientations from '../data/orientations.json';
+import rawMaterialAppearances from '../data/material-appearances.json';
 
 type RawWork = {
   slug: string;
@@ -58,6 +59,8 @@ export type Work = {
   department: string;
   medium: string;
   materials: string[];
+  materialProfile: string;
+  materialAppearance: MaterialAppearance;
   dimensions: string;
   accession: string;
   creditLine: string;
@@ -87,10 +90,31 @@ export type Facet = {
   count: number;
 };
 
+export type MaterialAppearance = {
+  key: string;
+  label: string;
+  material: string;
+  baseColor: string;
+  secondaryColor: string;
+  tintStrength: number;
+  variation: number;
+  metalness: number;
+  roughness: number;
+  textureDefault: number;
+  exposure: number;
+  envMapIntensity: number;
+};
+
 const rawWorks = rawCatalog as RawWork[];
 const previewMap = rawPreviews as Record<string, Preview>;
 const renderSet = new Set(rawRenders as string[]);
 const orientationMap = rawOrientations as Record<string, string>;
+const appearanceConfig = rawMaterialAppearances as {
+  profiles: Record<string, MaterialAppearance>;
+  materialToProfile: Record<string, string>;
+  collectionDefaults: Record<string, string>;
+  slugOverrides: Record<string, string>;
+};
 
 const makerCollections = new Set(['michelangelo', 'donatello', 'verrocchio', 'lorenzi', 'bouchardon', 'rodin']);
 
@@ -261,6 +285,9 @@ function cultureFor(raw: RawWork, geography: string): string {
 
 function materialsFor(raw: RawWork): string[] {
   const values = new Set<string>();
+  const override = clean(appearanceConfig.slugOverrides[raw.slug]);
+  if (override) values.add(override);
+
   const explicit = clean(raw.material);
   if (explicit) {
     for (const item of explicit.split(/[,;/]+/g)) {
@@ -284,7 +311,20 @@ function materialsFor(raw: RawWork): string[] {
     if (pattern.test(text)) values.add(label);
   }
 
+  if (!values.size) {
+    const fallback = clean(appearanceConfig.collectionDefaults[clean(raw.collection)]);
+    if (fallback) values.add(fallback);
+  }
+
   return [...values];
+}
+
+function materialProfileFor(materials: string[]): string {
+  for (const material of materials) {
+    const profile = appearanceConfig.materialToProfile[valueKey(material)];
+    if (profile && appearanceConfig.profiles[profile]) return profile;
+  }
+  return 'neutral';
 }
 
 function publicNote(raw: RawWork): string {
@@ -335,6 +375,8 @@ function normalize(raw: RawWork, fallbackIndex: number): Work {
   const geography = geographyFor(raw);
   const maker = makerFor(raw);
   const materials = materialsFor(raw);
+  const materialProfile = materialProfileFor(materials);
+  const materialAppearance = appearanceConfig.profiles[materialProfile] || appearanceConfig.profiles.neutral;
   const sourceMuseum = clean(raw.source_institution);
   const museum = clean(raw.museum);
   const preview = previewMap[raw.slug];
@@ -375,6 +417,8 @@ function normalize(raw: RawWork, fallbackIndex: number): Work {
     department: '',
     medium,
     materials,
+    materialProfile,
+    materialAppearance,
     dimensions: clean(raw.dimensions),
     accession: '',
     creditLine: '',
@@ -461,12 +505,34 @@ export function worksForMaterial(label: string): Work[] {
 }
 
 export function featuredWorkForDate(date = new Date()): Work {
-  const eligible = works.filter((work) => work.era !== 'Undated');
-  const groups = [...new Set(eligible.map((work) => work.era))].sort();
-  const day = Math.floor(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()) / 86400000);
-  const era = groups[day % groups.length];
-  const group = eligible.filter((work) => work.era === era).sort((a, b) => a.index - b.index);
-  return group[Math.floor(day / groups.length) % group.length] || works[0];
+  const pool = works.filter((work) => work.hasPreview);
+  const thinker = workBySlug('rodin/the-thinker') || pool[0] || works[0];
+  if (!pool.length) return thinker;
+
+  const shuffled = [...pool].sort((a, b) => stableHash(`atrium4-featured:${a.slug}`) - stableHash(`atrium4-featured:${b.slug}`));
+  const thinkerIndex = Math.max(0, shuffled.findIndex((work) => work.slug === thinker.slug));
+  const anchorWeek = utcWeekIndex(new Date(Date.UTC(2026, 5, 3)));
+  const weekOffset = utcWeekIndex(date) - anchorWeek;
+  return shuffled[positiveMod(thinkerIndex + weekOffset, shuffled.length)] || thinker;
+}
+
+function utcWeekIndex(date: Date): number {
+  const day = Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate());
+  const mondayEpoch = Date.UTC(1970, 0, 5);
+  return Math.floor((day - mondayEpoch) / (7 * 24 * 60 * 60 * 1000));
+}
+
+function positiveMod(value: number, modulo: number): number {
+  return ((value % modulo) + modulo) % modulo;
+}
+
+function stableHash(value: string): number {
+  let hash = 2166136261;
+  for (let i = 0; i < value.length; i += 1) {
+    hash ^= value.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return hash >>> 0;
 }
 
 export function collectionHighlights(): Work[] {

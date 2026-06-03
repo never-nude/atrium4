@@ -75,3 +75,4 @@ fallback and loads the web-detail GLB preview on object pages.
 
 - `AUDIT.md` summarizes the rebuild, verification status, assets, and review focus.
 - `CHATGPT_AUDIT_PROMPT.md` is a copy-paste prompt for a ChatGPT audit pass.
+- `COLLECTION-GROWTH.md` tracks the next open 3D source harvest, licensing policy, and acquisition order.

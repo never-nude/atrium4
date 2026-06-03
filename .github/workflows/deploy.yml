@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - main
+  schedule:
+    # Rebuild weekly so the static featured sculpture rotates on Monday.
+    - cron: '17 9 * * 1'
   workflow_dispatch:
 
 permissions:
@@ -37,8 +40,8 @@ jobs:
       - name: Build
         run: npm run build
         env:
-          SITE: https://never-nude.github.io/atrium3
-          BASE_PATH: /atrium3/
+          SITE: https://never-nude.github.io/atrium4
+          BASE_PATH: /atrium4/
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3

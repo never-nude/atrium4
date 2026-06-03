@@ -5,6 +5,8 @@ import { extname, join, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import sharp from 'sharp';
 import orientations from '../src/data/orientations.json' with { type: 'json' };
+import catalog from '../src/data/catalog.json' with { type: 'json' };
+import materialAppearances from '../src/data/material-appearances.json' with { type: 'json' };
 
 const root = resolve('.');
 const modelRoot = join(root, 'public/models/previews');
@@ -13,6 +15,7 @@ const chrome = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
 const serverPort = 8099;
 const width = 1000;
 const height = 1250;
+const recordsBySlug = new Map(catalog.map((record) => [record.slug, record]));
 
 if (!existsSync(chrome)) throw new Error(`Chrome not found at ${chrome}`);
 
@@ -40,6 +43,65 @@ function walk(dir, prefix = '') {
   return slugs;
 }
 
+function clean(value) {
+  const text = String(value ?? '').trim();
+  return text === '-' || text === '—' ? '' : text;
+}
+
+function valueKey(value) {
+  return value.toLowerCase().replace(/&/g, 'and').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+}
+
+function removeDir(dir) {
+  rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 150 });
+}
+
+function materialsFor(record) {
+  const values = new Set();
+  const override = clean(materialAppearances.slugOverrides[record.slug]);
+  if (override) values.add(override);
+
+  const explicit = clean(record.material);
+  if (explicit) {
+    for (const item of explicit.split(/[,;/]+/g)) {
+      const label = clean(item);
+      if (label) values.add(label);
+    }
+  }
+
+  const text = `${record.title ?? ''} ${record.year ?? ''} ${record.note ?? ''}`.toLowerCase();
+  const inferred = [
+    [/bronze/, 'Bronze'],
+    [/marble/, 'Marble'],
+    [/limestone/, 'Limestone'],
+    [/silver/, 'Silver'],
+    [/wood|post|mask|pole|box|drum|gong/, 'Wood'],
+    [/terracotta|ceramic|clay/, 'Ceramic'],
+    [/stone|stele|relief|sarcophagus|capital|corbel|lintel|voussoir|sphinx/, 'Stone'],
+  ];
+
+  for (const [pattern, label] of inferred) {
+    if (pattern.test(text)) values.add(label);
+  }
+
+  if (!values.size) {
+    const fallback = clean(materialAppearances.collectionDefaults[clean(record.collection)]);
+    if (fallback) values.add(fallback);
+  }
+
+  return [...values];
+}
+
+function appearanceForSlug(slug) {
+  const record = recordsBySlug.get(slug);
+  if (!record) return materialAppearances.profiles.neutral;
+  for (const material of materialsFor(record)) {
+    const key = materialAppearances.materialToProfile[valueKey(material)];
+    if (key && materialAppearances.profiles[key]) return materialAppearances.profiles[key];
+  }
+  return materialAppearances.profiles.neutral;
+}
+
 function staticServer() {
   return createServer((req, res) => {
     const url = new URL(req.url || '/', `http://127.0.0.1:${serverPort}`);
@@ -65,7 +127,7 @@ async function closeServer(server) {
 
 async function startChrome() {
   const profile = join(root, '.tmp/chrome-render-profile');
-  rmSync(profile, { recursive: true, force: true });
+  removeDir(profile);
   mkdirSync(profile, { recursive: true });
 
   const args = [
@@ -159,6 +221,7 @@ async function waitForRender(page, slug) {
 
 async function render(page, slug, index, total) {
   const up = orientations[slug] || 'auto';
+  const appearance = JSON.stringify(appearanceForSlug(slug));
   const outDir = join(outRoot, slug);
   const png = join(outDir, 'thumb.png');
   const webp = join(outDir, 'thumb.webp');
@@ -166,7 +229,7 @@ async function render(page, slug, index, total) {
   rmSync(png, { force: true });
 
   const model = `/public/models/previews/${slug}/preview.glb`;
-  const url = `http://127.0.0.1:${serverPort}/public/__render.html?model=${encodeURIComponent(model)}&up=${encodeURIComponent(up)}`;
+  const url = `http://127.0.0.1:${serverPort}/public/__render.html?model=${encodeURIComponent(model)}&up=${encodeURIComponent(up)}&appearance=${encodeURIComponent(appearance)}`;
   await page.send('Page.navigate', { url });
   await waitForRender(page, slug);
   const { data } = await page.send('Page.captureScreenshot', {
@@ -182,7 +245,10 @@ async function render(page, slug, index, total) {
 }
 
 let slugs = walk(modelRoot).sort();
-if (process.env.ONLY) slugs = slugs.filter((slug) => slug === process.env.ONLY);
+if (process.env.ONLY) {
+  const only = new Set(process.env.ONLY.split(',').map((slug) => slug.trim()).filter(Boolean));
+  slugs = slugs.filter((slug) => only.has(slug));
+}
 if (process.env.LIMIT) slugs = slugs.slice(0, Number(process.env.LIMIT));
 if (!slugs.length) throw new Error('No models matched the render request');
 
@@ -209,7 +275,8 @@ try {
     browser.proc.kill('SIGTERM');
     await delay(250);
     if (browser.proc.exitCode === null) browser.proc.kill('SIGKILL');
-    rmSync(browser.profile, { recursive: true, force: true });
+    await delay(250);
+    removeDir(browser.profile);
   }
   await closeServer(server);
 }

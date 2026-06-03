@@ -6,14 +6,16 @@ type Props = {
   hud?: boolean;
   tag?: string;
   upAxis?: string;
+  materialAppearance?: Record<string, unknown>;
 };
-const { glb = '', poster, title, hud = true, tag, upAxis = 'auto' } = Astro.props;
+const { glb = '', poster, title, hud = true, tag, upAxis = 'auto', materialAppearance = {} } = Astro.props;
 const hasModel = Boolean(glb);
 const uid = Math.random().toString(36).slice(2, 8);
+const appearanceJson = JSON.stringify(materialAppearance);
 ---
 
 <div class="viewer" data-viewer>
-  <div class="model-stage" data-stage data-glb={hasModel ? glb : ''} data-up-axis={upAxis}>
+  <div class="model-stage" data-stage data-glb={hasModel ? glb : ''} data-up-axis={upAxis} data-material-appearance={appearanceJson}>
     <span class="stage-corner stage-corner--tl" aria-hidden="true"></span>
     <span class="stage-corner stage-corner--tr" aria-hidden="true"></span>
     <span class="stage-corner stage-corner--bl" aria-hidden="true"></span>
@@ -78,7 +80,179 @@ const uid = Math.random().toString(36).slice(2, 8);
     setWireframe: (on: boolean) => void;
     setAutoRotate: (on: boolean) => void;
     reset: () => void;
+    defaults: { exposure: number; texture: number };
   };
+
+  type Appearance = {
+    baseColor: string;
+    secondaryColor: string;
+    tintStrength: number;
+    variation: number;
+    metalness: number;
+    roughness: number;
+    textureDefault: number;
+    exposure: number;
+    envMapIntensity: number;
+    emissiveIntensity?: number;
+    mapLift?: number;
+    mapFloor?: number;
+    backdropTop?: string;
+    backdropBase?: string;
+    backdropGlow?: string;
+    backdropGlowStrength?: number;
+    keyLightIntensity?: number;
+    fillLightIntensity?: number;
+    rimLightIntensity?: number;
+    hemiLightIntensity?: number;
+  };
+
+  const defaultAppearance: Appearance = {
+    baseColor: '#b9b09f',
+    secondaryColor: '#d8d0c2',
+    tintStrength: 0.52,
+    variation: 0.12,
+    metalness: 0,
+    roughness: 0.78,
+    textureDefault: 22,
+    exposure: 0.21,
+    envMapIntensity: 0.62,
+    emissiveIntensity: 0,
+    mapLift: 0,
+    mapFloor: 0,
+    backdropTop: '#1B2942',
+    backdropBase: '#070C16',
+    backdropGlow: '#E0A95B',
+    backdropGlowStrength: 0.18,
+    keyLightIntensity: 2.4,
+    fillLightIntensity: 0.55,
+    rimLightIntensity: 0.4,
+    hemiLightIntensity: 0.7,
+  };
+
+  function readAppearance(stage: HTMLElement): Appearance {
+    try {
+      return { ...defaultAppearance, ...JSON.parse(stage.dataset.materialAppearance || '{}') };
+    } catch {
+      return defaultAppearance;
+    }
+  }
+
+  function clamp01(value: number) {
+    return Math.max(0, Math.min(1, value));
+  }
+
+  function noise01(value: number) {
+    const s = Math.sin(value * 12.9898) * 43758.5453;
+    return s - Math.floor(s);
+  }
+
+  function hexToRgba(hex: string | undefined, alpha: number) {
+    const source = (hex || '#E0A95B').replace('#', '').trim();
+    const full = source.length === 3 ? source.split('').map((char) => char + char).join('') : source;
+    if (!/^[0-9a-f]{6}$/i.test(full)) return `rgba(224, 169, 91, ${clamp01(alpha)})`;
+    const value = Number.parseInt(full, 16);
+    const r = (value >> 16) & 255;
+    const g = (value >> 8) & 255;
+    const b = value & 255;
+    return `rgba(${r}, ${g}, ${b}, ${clamp01(alpha)})`;
+  }
+
+  function applyStageBackdrop(stage: HTMLElement, appearance: Appearance) {
+    const top = appearance.backdropTop || defaultAppearance.backdropTop;
+    const base = appearance.backdropBase || defaultAppearance.backdropBase;
+    const glow = hexToRgba(appearance.backdropGlow, appearance.backdropGlowStrength ?? defaultAppearance.backdropGlowStrength ?? 0.18);
+    stage.style.background = [
+      `radial-gradient(70% 52% at 50% 20%, ${glow}, transparent 72%)`,
+      `radial-gradient(120% 80% at 50% -5%, ${top}, ${base} 78%)`,
+    ].join(', ');
+  }
+
+  function addMaterialVariation(THREE: any, mesh: any, material: any, appearance: Appearance) {
+    const position = mesh.geometry?.attributes?.position;
+    if (!position || position.count > 850000) return;
+
+    if (!mesh.geometry.attributes.color) mesh.geometry = mesh.geometry.clone();
+    const colors = new Float32Array(position.count * 3);
+    const base = new THREE.Color(appearance.baseColor);
+    const secondary = new THREE.Color(appearance.secondaryColor || appearance.baseColor);
+    const seed = noise01((mesh.name || material.name || 'atrium').length * 17.17);
+
+    for (let i = 0; i < position.count; i += 1) {
+      const x = position.getX(i), y = position.getY(i), z = position.getZ(i);
+      const grain = noise01(x * 37.1 + y * 51.7 + z * 73.3 + seed * 19.9);
+      const vertical = clamp01((y + 0.5) * 0.75);
+      const mix = clamp01(grain * appearance.variation + vertical * appearance.variation * 0.45);
+      const color = base.clone().lerp(secondary, mix);
+      const shade = 1 - appearance.variation * 0.28 + grain * appearance.variation * 0.42;
+      color.multiplyScalar(shade);
+      colors[i * 3] = color.r;
+      colors[i * 3 + 1] = color.g;
+      colors[i * 3 + 2] = color.b;
+    }
+
+    mesh.geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+    material.vertexColors = true;
+  }
+
+  function prepareMaterial(THREE: any, source: any) {
+    if ('roughness' in source && 'metalness' in source && 'emissive' in source) return source;
+    const prepared = new THREE.MeshStandardMaterial({
+      name: source.name || 'atrium-material',
+      map: source.map || null,
+      normalMap: source.normalMap || null,
+      aoMap: source.aoMap || null,
+      alphaMap: source.alphaMap || null,
+      transparent: source.transparent || false,
+      opacity: source.opacity ?? 1,
+      side: source.side,
+      color: source.color ? source.color.clone() : new THREE.Color(0xffffff),
+    });
+    prepared.needsUpdate = true;
+    return prepared;
+  }
+
+  function applyMapLift(THREE: any, material: any, appearance: Appearance) {
+    const mapLift = appearance.mapLift || 0;
+    const mapFloor = appearance.mapFloor || 0;
+    if (!material.map || (!mapLift && !mapFloor)) return;
+    const liftColor = new THREE.Color(appearance.secondaryColor || appearance.baseColor);
+    material.onBeforeCompile = (shader: any) => {
+      shader.uniforms.atriumMapLift = { value: mapLift };
+      shader.uniforms.atriumMapFloor = { value: mapFloor };
+      shader.uniforms.atriumMapLiftColor = { value: liftColor };
+      shader.fragmentShader = `
+uniform float atriumMapLift;
+uniform float atriumMapFloor;
+uniform vec3 atriumMapLiftColor;
+${shader.fragmentShader.replace('#include <map_fragment>', `
+#include <map_fragment>
+#ifdef USE_MAP
+  diffuseColor.rgb = mix(diffuseColor.rgb, atriumMapLiftColor, atriumMapLift);
+  float atriumLuma = dot(diffuseColor.rgb, vec3(0.2126, 0.7152, 0.0722));
+  if (atriumLuma < atriumMapFloor) {
+    diffuseColor.rgb *= atriumMapFloor / max(atriumLuma, 0.001);
+  }
+#endif
+`)}`;
+    };
+    material.customProgramCacheKey = () => `atrium-map-lift-${mapLift}-${mapFloor}-${liftColor.getHexString()}`;
+  }
+
+  function applyMaterialAppearance(THREE: any, mesh: any, material: any, appearance: Appearance) {
+    if (!('color' in material)) return;
+    const target = new THREE.Color(appearance.baseColor);
+    material.color.lerp(target, appearance.tintStrength);
+    if ('metalness' in material) material.metalness = appearance.metalness;
+    if ('roughness' in material) material.roughness = appearance.roughness;
+    if ('envMapIntensity' in material) material.envMapIntensity = appearance.envMapIntensity;
+    if ('emissive' in material && appearance.emissiveIntensity) {
+      material.emissive.lerp(target, 0.72);
+      material.emissiveIntensity = appearance.emissiveIntensity;
+    }
+    applyMapLift(THREE, material, appearance);
+    addMaterialVariation(THREE, mesh, material, appearance);
+    material.needsUpdate = true;
+  }
 
   async function buildViewer(stage: HTMLElement, glb: string): Promise<Viewer> {
     const THREE = await import('three');
@@ -90,12 +264,14 @@ const uid = Math.random().toString(36).slice(2, 8);
 
     let width = stage.clientWidth || 600;
     let height = stage.clientHeight || 600;
+    const appearance = readAppearance(stage);
+    applyStageBackdrop(stage, appearance);
 
     const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.setSize(width, height);
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    renderer.toneMappingExposure = 0.2;
+    renderer.toneMappingExposure = appearance.exposure;
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.domElement.classList.add('viewer-canvas');
     stage.appendChild(renderer.domElement);
@@ -107,15 +283,18 @@ const uid = Math.random().toString(36).slice(2, 8);
     const pmrem = new THREE.PMREMGenerator(renderer);
     scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
 
-    scene.add(new THREE.HemisphereLight(0xeaf0f7, 0x0b1220, 0.7));
-    const key = new THREE.DirectionalLight(0xfff1dd, 2.4);
+    scene.add(new THREE.HemisphereLight(0xeaf0f7, 0x0b1220, appearance.hemiLightIntensity ?? 0.7));
+    const key = new THREE.DirectionalLight(0xfff1dd, appearance.keyLightIntensity ?? 2.4);
     const keyRadius = 5, keyHeight = 4;
     function placeKey(pct: number) { const a = (pct / 100) * Math.PI * 2; key.position.set(Math.cos(a) * keyRadius, keyHeight, Math.sin(a) * keyRadius); }
     placeKey(15);
     scene.add(key);
-    const fill = new THREE.DirectionalLight(0x9fb6d6, 0.55);
+    const fill = new THREE.DirectionalLight(0x9fb6d6, appearance.fillLightIntensity ?? 0.55);
     fill.position.set(-3, 1.2, -2.5);
     scene.add(fill);
+    const rim = new THREE.DirectionalLight(0xdbe8ff, appearance.rimLightIntensity ?? 0.4);
+    rim.position.set(-2.7, 2.6, 3.4);
+    scene.add(rim);
 
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.enableDamping = true;
@@ -144,8 +323,10 @@ const uid = Math.random().toString(36).slice(2, 8);
       }
       if (obj.isMesh && obj.material) {
         const list = Array.isArray(obj.material) ? obj.material : [obj.material];
-        for (const m of list) {
-          if (!('roughness' in m)) continue;
+        const prepared = list.map((m: any) => prepareMaterial(THREE, m));
+        obj.material = Array.isArray(obj.material) ? prepared : prepared[0];
+        for (const m of prepared) {
+          applyMaterialAppearance(THREE, obj, m, appearance);
           materials.push(m);
         }
       }
@@ -236,6 +417,7 @@ const uid = Math.random().toString(36).slice(2, 8);
       setWireframe: (on) => { for (const m of materials) { m.wireframe = on; } },
       setAutoRotate: (on) => { controls.autoRotate = on; },
       reset: () => { camera.position.copy(home.pos); controls.target.copy(home.tgt); controls.update(); },
+      defaults: { exposure: Math.round(appearance.exposure * 100), texture: appearance.textureDefault },
     };
   }
 
@@ -270,6 +452,9 @@ const uid = Math.random().toString(36).slice(2, 8);
           const wire = hud.querySelector('[data-wireframe]') as HTMLInputElement | null;
           const reset = hud.querySelector('[data-reset]') as HTMLButtonElement | null;
           const readB = hud.querySelector('[data-read-brightness]') as HTMLElement | null;
+          if (brightness) brightness.value = String(viewer.defaults.exposure);
+          if (texture) texture.value = String(viewer.defaults.texture);
+          if (readB && brightness) readB.textContent = `${brightness.value}%`;
           if (brightness) { viewer.setBrightness(+brightness.value); brightness.addEventListener('input', () => { viewer.setBrightness(+brightness.value); if (readB) readB.textContent = `${brightness.value}%`; }); }
           if (texture) { viewer.setTexture(+texture.value); texture.addEventListener('input', () => viewer.setTexture(+texture.value)); }
           if (light) { viewer.setLightAngle(+light.value); light.addEventListener('input', () => viewer.setLightAngle(+light.value)); }
