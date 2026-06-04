@@ -7,6 +7,7 @@ import sharp from 'sharp';
 import orientations from '../src/data/orientations.json' with { type: 'json' };
 import catalog from '../src/data/catalog.json' with { type: 'json' };
 import materialAppearances from '../src/data/material-appearances.json' with { type: 'json' };
+import appearanceOverrides from '../src/data/appearance-overrides.json' with { type: 'json' };
 
 const root = resolve('.');
 const modelRoot = join(root, 'public/models/previews');
@@ -16,6 +17,18 @@ const serverPort = 8099;
 const width = 1000;
 const height = 1250;
 const recordsBySlug = new Map(catalog.map((record) => [record.slug, record]));
+const internalNotePatterns = [
+  'mesh',
+  'source stl',
+  'source mesh',
+  'viewer uses',
+  'viewer basis',
+  'museum-style lighting',
+  'mobile-friendly controls',
+  'post-load rotation',
+  'camera unchanged',
+  'upright in this viewer',
+];
 
 if (!existsSync(chrome)) throw new Error(`Chrome not found at ${chrome}`);
 
@@ -52,6 +65,14 @@ function valueKey(value) {
   return value.toLowerCase().replace(/&/g, 'and').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
 }
 
+function publicNote(record) {
+  const note = clean(record.note);
+  if (!note) return '';
+  const lower = note.toLowerCase();
+  if (internalNotePatterns.some((pattern) => lower.includes(pattern))) return '';
+  return note;
+}
+
 function removeDir(dir) {
   rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 150 });
 }
@@ -69,7 +90,7 @@ function materialsFor(record) {
     }
   }
 
-  const text = `${record.title ?? ''} ${record.year ?? ''} ${record.note ?? ''}`.toLowerCase();
+  const text = `${record.title ?? ''} ${record.year ?? ''} ${publicNote(record)}`.toLowerCase();
   const inferred = [
     [/bronze/, 'Bronze'],
     [/marble/, 'Marble'],
@@ -92,14 +113,27 @@ function materialsFor(record) {
   return [...values];
 }
 
+function materialProfileFor(slug, materials) {
+  const overrideProfile = clean(appearanceOverrides[slug]?.profile);
+  if (overrideProfile && materialAppearances.profiles[overrideProfile]) return overrideProfile;
+  for (const material of materials) {
+    const key = materialAppearances.materialToProfile[valueKey(material)];
+    if (key && materialAppearances.profiles[key]) return key;
+  }
+  return 'neutral';
+}
+
+function effectiveAppearanceFor(slug, profileKey) {
+  const base = materialAppearances.profiles[profileKey] || materialAppearances.profiles.neutral;
+  const { profile: _profile, ...override } = appearanceOverrides[slug] || {};
+  return { ...base, ...override };
+}
+
 function appearanceForSlug(slug) {
   const record = recordsBySlug.get(slug);
   if (!record) return materialAppearances.profiles.neutral;
-  for (const material of materialsFor(record)) {
-    const key = materialAppearances.materialToProfile[valueKey(material)];
-    if (key && materialAppearances.profiles[key]) return materialAppearances.profiles[key];
-  }
-  return materialAppearances.profiles.neutral;
+  const profileKey = materialProfileFor(slug, materialsFor(record));
+  return effectiveAppearanceFor(slug, profileKey);
 }
 
 function staticServer() {

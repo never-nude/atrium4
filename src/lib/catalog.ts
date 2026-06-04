@@ -3,6 +3,7 @@ import rawPreviews from '../data/previews.json';
 import rawRenders from '../data/renders.json';
 import rawOrientations from '../data/orientations.json';
 import rawMaterialAppearances from '../data/material-appearances.json';
+import rawAppearanceOverrides from '../data/appearance-overrides.json';
 
 type RawWork = {
   slug: string;
@@ -103,6 +104,21 @@ export type MaterialAppearance = {
   textureDefault: number;
   exposure: number;
   envMapIntensity: number;
+  emissiveIntensity?: number;
+  mapLift?: number;
+  mapFloor?: number;
+  backdropTop?: string;
+  backdropBase?: string;
+  backdropGlow?: string;
+  backdropGlowStrength?: number;
+  keyLightIntensity?: number;
+  fillLightIntensity?: number;
+  rimLightIntensity?: number;
+  hemiLightIntensity?: number;
+};
+
+type AppearanceOverride = Partial<Omit<MaterialAppearance, 'key' | 'label' | 'material'>> & {
+  profile?: string;
 };
 
 const rawWorks = rawCatalog as RawWork[];
@@ -115,6 +131,7 @@ const appearanceConfig = rawMaterialAppearances as {
   collectionDefaults: Record<string, string>;
   slugOverrides: Record<string, string>;
 };
+const appearanceOverrides = rawAppearanceOverrides as Record<string, AppearanceOverride>;
 
 const makerCollections = new Set(['michelangelo', 'donatello', 'verrocchio', 'lorenzi', 'bouchardon', 'rodin']);
 
@@ -319,12 +336,24 @@ function materialsFor(raw: RawWork): string[] {
   return [...values];
 }
 
-function materialProfileFor(materials: string[]): string {
+function materialProfileFor(slug: string, materials: string[]): string {
+  const overrideProfile = clean(appearanceOverrides[slug]?.profile);
+  if (overrideProfile && appearanceConfig.profiles[overrideProfile]) return overrideProfile;
   for (const material of materials) {
     const profile = appearanceConfig.materialToProfile[valueKey(material)];
     if (profile && appearanceConfig.profiles[profile]) return profile;
   }
   return 'neutral';
+}
+
+function effectiveAppearanceFor(slug: string, profileKey: string): MaterialAppearance {
+  const base = appearanceConfig.profiles[profileKey] || appearanceConfig.profiles.neutral;
+  const { profile: _profile, ...override } = appearanceOverrides[slug] || {};
+  return { ...base, ...override };
+}
+
+export function getEffectiveAppearance(work: Pick<Work, 'slug' | 'materialProfile'>): MaterialAppearance {
+  return effectiveAppearanceFor(work.slug, work.materialProfile);
 }
 
 function publicNote(raw: RawWork): string {
@@ -375,8 +404,8 @@ function normalize(raw: RawWork, fallbackIndex: number): Work {
   const geography = geographyFor(raw);
   const maker = makerFor(raw);
   const materials = materialsFor(raw);
-  const materialProfile = materialProfileFor(materials);
-  const materialAppearance = appearanceConfig.profiles[materialProfile] || appearanceConfig.profiles.neutral;
+  const materialProfile = materialProfileFor(raw.slug, materials);
+  const materialAppearance = effectiveAppearanceFor(raw.slug, materialProfile);
   const sourceMuseum = clean(raw.source_institution);
   const museum = clean(raw.museum);
   const preview = previewMap[raw.slug];

@@ -2,8 +2,8 @@
 <style>
  html,body{margin:0;height:100%;overflow:hidden}
  #bg{position:fixed;inset:0;background:
-   radial-gradient(58% 44% at 50% 16%, rgba(224,169,91,.18), transparent 70%),
-   radial-gradient(125% 95% at 50% -2%, #1d2b46, #0c1424 72%);}
+   radial-gradient(70% 52% at 50% 20%, rgba(215,222,232,.07), transparent 72%),
+   #15243A;}
  canvas{position:fixed;inset:0}
 </style>
 <script type="importmap">
@@ -30,26 +30,26 @@ const rim=new THREE.DirectionalLight(0xdbe8ff,.4); rim.position.set(-2.7,2.6,3.4
 const loader=new GLTFLoader(); loader.setMeshoptDecoder(MeshoptDecoder); let current=null;
 function loop(){ renderer.render(scene,camera); requestAnimationFrame(loop); } loop();
 const defaultAppearance={
-  baseColor:'#b9b09f',
-  secondaryColor:'#d8d0c2',
-  tintStrength:.52,
+  baseColor:'#9F9689',
+  secondaryColor:'#7A7268',
+  tintStrength:.1,
   variation:.12,
   metalness:0,
-  roughness:.78,
-  textureDefault:22,
-  exposure:.21,
-  envMapIntensity:.62,
+  roughness:.68,
+  textureDefault:34,
+  exposure:.66,
+  envMapIntensity:.18,
   emissiveIntensity:0,
-  mapLift:0,
-  mapFloor:0,
-  backdropTop:'#1B2942',
-  backdropBase:'#070C16',
-  backdropGlow:'#E0A95B',
-  backdropGlowStrength:.18,
-  keyLightIntensity:2.3,
-  fillLightIntensity:.5,
-  rimLightIntensity:.4,
-  hemiLightIntensity:.7
+  mapLift:.16,
+  mapFloor:.05,
+  backdropTop:'#15243A',
+  backdropBase:'#15243A',
+  backdropGlow:'#D7DEE8',
+  backdropGlowStrength:.07,
+  keyLightIntensity:1.12,
+  fillLightIntensity:.88,
+  rimLightIntensity:1.16,
+  hemiLightIntensity:.82
 };
 function readAppearance(raw) {
   try { return {...defaultAppearance, ...JSON.parse(raw || '{}')}; }
